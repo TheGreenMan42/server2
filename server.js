@@ -9,10 +9,7 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 
-// Статика
 app.use(express.static(path.join(__dirname)));
-
-// --- Игровое состояние ---
 
 const COLS = 10;
 const ROWS = 5;
@@ -31,14 +28,15 @@ let gameState = {
   nextZombieId: 1
 };
 
-// Инициализация полей
 for (let i = 0; i < TILE_COUNT; i++) {
   gameState.tiles.push({
-    open: i === Math.floor(TILE_COUNT / 2) // одно поле открыто
+    open: i === Math.floor(TILE_COUNT / 2)
   });
 }
 
-// --- Вспомогательные функции ---
+let globalWidth = 1000;
+let globalHeight = 700;
+let lastNightStart = Date.now();
 
 function broadcastState() {
   io.emit('state', gameState);
@@ -58,24 +56,21 @@ function spend(cost) {
   return true;
 }
 
-// Цена коров
 function getCowPrice(type, existingCount) {
   if (type === 'normal') {
     if (existingCount === 0) return 0;
     if (existingCount === 1) return 2;
-    return Math.pow(2, existingCount); // 3-я = 4, 4-я = 8 и т.д.
+    return Math.pow(2, existingCount);
   } else {
     if (existingCount === 0) return 10;
-    return 10 * Math.pow(5, existingCount); // 2-я = 50, 3-я = 250 и т.д.
+    return 10 * Math.pow(5, existingCount);
   }
 }
 
-// Лимит золотых коров
 function countGoldCows() {
   return gameState.cows.filter(c => c.type === 'gold').length;
 }
 
-// Параметры коров
 function getCowBaseStats(type) {
   if (type === 'normal') {
     return {
@@ -125,7 +120,6 @@ function getHealthMax(type, level) {
   }
 }
 
-// Стоимость апгрейдов
 function getSpeedUpgradeCost(type, level) {
   if (type === 'normal') {
     if (level === 0) return 20;
@@ -153,13 +147,11 @@ function getHealthUpgradeCost(type, level) {
   }
 }
 
-// --- Молоко ---
-
 function spawnMilkForCow(cow) {
   const id = gameState.nextMilkId++;
   const type = cow.type === 'normal' ? 'normal' : 'gold';
-  const x = Math.floor(Math.random() * (globalWidth || 800));
-  const y = Math.floor(Math.random() * (globalHeight || 600));
+  const x = Math.floor(Math.random() * globalWidth);
+  const y = Math.floor(Math.random() * globalHeight);
   const milk = {
     id,
     type,
@@ -176,27 +168,22 @@ function cleanupOldMilk() {
   gameState.milk = gameState.milk.filter(m => now - m.createdAt < 60000);
 }
 
-// --- Зомби и ночь ---
-
-let lastNightStart = Date.now();
-
 function startNight() {
   gameState.isNight = true;
   gameState.zombies = [];
 
-  // 10 зомби из разных углов
   for (let i = 0; i < 10; i++) {
     const id = gameState.nextZombieId++;
     const corner = i % 4;
     let x = 0, y = 0;
     if (corner === 0) { x = 0; y = 0; }
-    if (corner === 1) { x = 1000; y = 0; }
-    if (corner === 2) { x = 0; y = 700; }
-    if (corner === 3) { x = 1000; y = 700; }
+    if (corner === 1) { x = globalWidth; y = 0; }
+    if (corner === 2) { x = 0; y = globalHeight; }
+    if (corner === 3) { x = globalWidth; y = globalHeight; }
 
-    const speed = 2 + Math.random() * 3; // 2-5
-    const hp = 5 + Math.floor(Math.random() * 11); // 5-15
-    const dmg = 1 + Math.floor(Math.random() * 2); // 1-2
+    const speed = 2 + Math.random() * 3;
+    const hp = 5 + Math.floor(Math.random() * 11);
+    const dmg = 1 + Math.floor(Math.random() * 2);
 
     gameState.zombies.push({
       id,
@@ -253,15 +240,13 @@ function updateZombies(dt) {
     z.targetCowId = cow.id;
 
     if (dist > 5) {
-      // идём к корове
       const vx = (cx - z.x) / dist;
       const vy = (cy - z.y) / dist;
       z.x += vx * z.speed * dt;
       z.y += vy * z.speed * dt;
     } else {
-      // атакуем корову
       const dmg = z.dmg;
-      cow.hp -= dmg * dt; // dt ~ 1 сек => 1-2 урона/сек
+      cow.hp -= dmg * dt;
       if (cow.hp <= 0) {
         toRemoveCows.add(cow.id);
       }
@@ -272,34 +257,27 @@ function updateZombies(dt) {
     gameState.cows = gameState.cows.filter(c => !toRemoveCows.has(c.id));
   }
 
-  // убрать зомби с 0 хп
   gameState.zombies = gameState.zombies.filter(z => z.hp > 0);
 
   endNightIfNoZombies();
 }
 
-// --- Глобальные размеры (для рандомных координат молока) ---
-
-let globalWidth = 1000;
-let globalHeight = 700;
-
-// --- Socket.IO ---
-
 io.on('connection', (socket) => {
-  // клиент сообщает свои размеры окна (можно добавить на клиенте)
   socket.on('join', () => {
     socket.emit('state', gameState);
   });
 
   socket.on('windowSize', ({ width, height }) => {
-    globalWidth = width;
-    globalHeight = height;
+    if (width && height) {
+      globalWidth = width;
+      globalHeight = height;
+    }
   });
 
   socket.on('buyTile', ({ tileIndex }) => {
     const tile = gameState.tiles[tileIndex];
     if (!tile) return;
-    if (tile.open) return; // уже открыто
+    if (tile.open) return;
 
     const price = gameState.nextTilePrice;
     if (!canAfford(price)) {
@@ -320,10 +298,7 @@ io.on('connection', (socket) => {
     if (!tile || !tile.open) return;
 
     const existingCow = gameState.cows.find(c => c.tileIndex === tileIndex);
-    if (existingCow) {
-      // защита: корова уже стоит
-      return;
-    }
+    if (existingCow) return;
 
     if (type !== 'normal' && type !== 'gold') return;
 
@@ -414,8 +389,6 @@ io.on('connection', (socket) => {
   });
 });
 
-// --- Игровой цикл ---
-
 let lastTick = Date.now();
 
 setInterval(() => {
@@ -423,7 +396,6 @@ setInterval(() => {
   const dtSec = (now - lastTick) / 1000;
   lastTick = now;
 
-  // Генерация молока
   gameState.cows.forEach(cow => {
     const interval = getSpeedInterval(cow.type, cow.speedLevel);
     if (now - cow.lastMilkAt >= interval) {
@@ -434,18 +406,14 @@ setInterval(() => {
 
   cleanupOldMilk();
 
-  // Ночь каждые 15 минут
   if (!gameState.isNight && now - lastNightStart >= 15 * 60 * 1000) {
     startNight();
   }
 
-  // Обновление зомби
   updateZombies(dtSec);
 
   broadcastState();
 }, 1000);
-
-// --- Запуск ---
 
 server.listen(PORT, () => {
   console.log('Server listening on port', PORT);
