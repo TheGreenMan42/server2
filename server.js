@@ -1,15 +1,23 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const path = require('path');
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const cors = require("cors");
 
 const app = express();
+app.use(cors());
+
 const server = http.createServer(app);
-const io = new Server(server);
+
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 
-app.use(express.static(path.join(__dirname)));
+// ---------------- ИГРОВОЕ СОСТОЯНИЕ ----------------
 
 const COLS = 10;
 const ROWS = 5;
@@ -39,11 +47,11 @@ let globalHeight = 700;
 let lastNightStart = Date.now();
 
 function broadcastState() {
-  io.emit('state', gameState);
+  io.emit("state", gameState);
 }
 
 function sendError(socket, msg) {
-  socket.emit('errorMessage', msg);
+  socket.emit("errorMessage", msg);
 }
 
 function canAfford(cost) {
@@ -56,8 +64,10 @@ function spend(cost) {
   return true;
 }
 
+// ---------------- ЦЕНЫ ----------------
+
 function getCowPrice(type, existingCount) {
-  if (type === 'normal') {
+  if (type === "normal") {
     if (existingCount === 0) return 0;
     if (existingCount === 1) return 2;
     return Math.pow(2, existingCount);
@@ -68,11 +78,11 @@ function getCowPrice(type, existingCount) {
 }
 
 function countGoldCows() {
-  return gameState.cows.filter(c => c.type === 'gold').length;
+  return gameState.cows.filter(c => c.type === "gold").length;
 }
 
 function getCowBaseStats(type) {
-  if (type === 'normal') {
+  if (type === "normal") {
     return {
       speedLevel: 0,
       healthLevel: 0,
@@ -90,7 +100,7 @@ function getCowBaseStats(type) {
 }
 
 function getSpeedInterval(type, level) {
-  if (type === 'normal') {
+  if (type === "normal") {
     if (level === 0) return 40000;
     if (level === 1) return 30000;
     if (level === 2) return 20000;
@@ -107,7 +117,7 @@ function getSpeedInterval(type, level) {
 }
 
 function getHealthMax(type, level) {
-  if (type === 'normal') {
+  if (type === "normal") {
     if (level === 0) return 3;
     if (level === 1) return 5;
     if (level === 2) return 10;
@@ -121,7 +131,7 @@ function getHealthMax(type, level) {
 }
 
 function getSpeedUpgradeCost(type, level) {
-  if (type === 'normal') {
+  if (type === "normal") {
     if (level === 0) return 20;
     if (level === 1) return 100;
     if (level === 2) return 250;
@@ -136,7 +146,7 @@ function getSpeedUpgradeCost(type, level) {
 }
 
 function getHealthUpgradeCost(type, level) {
-  if (type === 'normal') {
+  if (type === "normal") {
     if (level === 0) return 50;
     if (level === 1) return 145;
     return null;
@@ -147,26 +157,32 @@ function getHealthUpgradeCost(type, level) {
   }
 }
 
+// ---------------- МОЛОКО ----------------
+
 function spawnMilkForCow(cow) {
   const id = gameState.nextMilkId++;
-  const type = cow.type === 'normal' ? 'normal' : 'gold';
+  const type = cow.type === "normal" ? "normal" : "gold";
+
   const x = Math.floor(Math.random() * globalWidth);
   const y = Math.floor(Math.random() * globalHeight);
-  const milk = {
+
+  gameState.milk.push({
     id,
     type,
     x,
     y,
     createdAt: Date.now()
-  };
-  gameState.milk.push(milk);
-  io.emit('cowShake', cow.tileIndex);
+  });
+
+  io.emit("cowShake", cow.tileIndex);
 }
 
 function cleanupOldMilk() {
   const now = Date.now();
   gameState.milk = gameState.milk.filter(m => now - m.createdAt < 60000);
 }
+
+// ---------------- ЗОМБИ ----------------
 
 function startNight() {
   gameState.isNight = true;
@@ -175,6 +191,7 @@ function startNight() {
   for (let i = 0; i < 10; i++) {
     const id = gameState.nextZombieId++;
     const corner = i % 4;
+
     let x = 0, y = 0;
     if (corner === 0) { x = 0; y = 0; }
     if (corner === 1) { x = globalWidth; y = 0; }
@@ -209,27 +226,34 @@ function endNightIfNoZombies() {
 
 function findNearestCow(zombie) {
   if (gameState.cows.length === 0) return null;
+
   let best = null;
   let bestDist = Infinity;
+
   gameState.cows.forEach(cow => {
     const tileIndex = cow.tileIndex;
     const col = tileIndex % COLS;
     const row = Math.floor(tileIndex / COLS);
+
     const cx = 200 + col * 44;
     const cy = 100 + row * 44;
+
     const dx = cx - zombie.x;
     const dy = cy - zombie.y;
-    const dist = Math.sqrt(dx*dx + dy*dy);
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
     if (dist < bestDist) {
       bestDist = dist;
       best = { cow, cx, cy, dist };
     }
   });
+
   return best;
 }
 
 function updateZombies(dt) {
   if (!gameState.isNight) return;
+
   const toRemoveCows = new Set();
 
   gameState.zombies.forEach(z => {
@@ -237,7 +261,6 @@ function updateZombies(dt) {
     if (!target) return;
 
     const { cow, cx, cy, dist } = target;
-    z.targetCowId = cow.id;
 
     if (dist > 5) {
       const vx = (cx - z.x) / dist;
@@ -245,11 +268,8 @@ function updateZombies(dt) {
       z.x += vx * z.speed * dt;
       z.y += vy * z.speed * dt;
     } else {
-      const dmg = z.dmg;
-      cow.hp -= dmg * dt;
-      if (cow.hp <= 0) {
-        toRemoveCows.add(cow.id);
-      }
+      cow.hp -= z.dmg * dt;
+      if (cow.hp <= 0) toRemoveCows.add(cow.id);
     }
   });
 
@@ -262,64 +282,49 @@ function updateZombies(dt) {
   endNightIfNoZombies();
 }
 
-io.on('connection', (socket) => {
-  socket.on('join', () => {
-    socket.emit('state', gameState);
+// ---------------- SOCKET.IO ----------------
+
+io.on("connection", socket => {
+  socket.on("join", () => {
+    socket.emit("state", gameState);
   });
 
-  socket.on('windowSize', ({ width, height }) => {
+  socket.on("windowSize", ({ width, height }) => {
     if (width && height) {
       globalWidth = width;
       globalHeight = height;
     }
   });
 
-  socket.on('buyTile', ({ tileIndex }) => {
+  socket.on("buyTile", ({ tileIndex }) => {
     const tile = gameState.tiles[tileIndex];
-    if (!tile) return;
-    if (tile.open) return;
+    if (!tile || tile.open) return;
 
     const price = gameState.nextTilePrice;
-    if (!canAfford(price)) {
-      sendError(socket, 'Упс! Кажется у вас не хватает денег.');
-      return;
-    }
-    if (!spend(price)) {
-      sendError(socket, 'Упс! Кажется у вас не хватает денег.');
-      return;
-    }
+    if (!spend(price)) return sendError(socket, "Упс! Не хватает денег.");
+
     tile.open = true;
     gameState.nextTilePrice += 50;
     broadcastState();
   });
 
-  socket.on('placeCow', ({ tileIndex, type }) => {
+  socket.on("placeCow", ({ tileIndex, type }) => {
     const tile = gameState.tiles[tileIndex];
     if (!tile || !tile.open) return;
 
-    const existingCow = gameState.cows.find(c => c.tileIndex === tileIndex);
-    if (existingCow) return;
+    if (gameState.cows.find(c => c.tileIndex === tileIndex)) return;
 
-    if (type !== 'normal' && type !== 'gold') return;
-
-    if (type === 'gold' && countGoldCows() >= 10) {
-      sendError(socket, 'Лимит золотых коров достигнут (10).');
-      return;
-    }
+    if (type === "gold" && countGoldCows() >= 10)
+      return sendError(socket, "Лимит золотых коров!");
 
     const existingCount = gameState.cows.filter(c => c.type === type).length;
     const price = getCowPrice(type, existingCount);
-    if (!canAfford(price)) {
-      sendError(socket, 'Упс! Кажется у вас не хватает денег.');
-      return;
-    }
-    if (!spend(price)) {
-      sendError(socket, 'Упс! Кажется у вас не хватает денег.');
-      return;
-    }
+
+    if (!spend(price)) return sendError(socket, "Упс! Не хватает денег.");
 
     const base = getCowBaseStats(type);
-    const cow = {
+
+    gameState.cows.push({
       id: gameState.nextCowId++,
       type,
       tileIndex,
@@ -328,38 +333,26 @@ io.on('connection', (socket) => {
       hp: base.maxHp,
       maxHp: base.maxHp,
       lastMilkAt: Date.now()
-    };
-    gameState.cows.push(cow);
+    });
+
     broadcastState();
   });
 
-  socket.on('upgradeCow', ({ tileIndex, kind }) => {
+  socket.on("upgradeCow", ({ tileIndex, kind }) => {
     const cow = gameState.cows.find(c => c.tileIndex === tileIndex);
     if (!cow) return;
 
-    if (kind === 'speed') {
+    if (kind === "speed") {
       const cost = getSpeedUpgradeCost(cow.type, cow.speedLevel);
       if (cost == null) return;
-      if (!canAfford(cost)) {
-        sendError(socket, 'Упс! Кажется у вас не хватает денег.');
-        return;
-      }
-      if (!spend(cost)) {
-        sendError(socket, 'Упс! Кажется у вас не хватает денег.');
-        return;
-      }
+      if (!spend(cost)) return sendError(socket, "Не хватает денег.");
       cow.speedLevel++;
-    } else if (kind === 'health') {
+    }
+
+    if (kind === "health") {
       const cost = getHealthUpgradeCost(cow.type, cow.healthLevel);
       if (cost == null) return;
-      if (!canAfford(cost)) {
-        sendError(socket, 'Упс! Кажется у вас не хватает денег.');
-        return;
-      }
-      if (!spend(cost)) {
-        sendError(socket, 'Упс! Кажется у вас не хватает денег.');
-        return;
-      }
+      if (!spend(cost)) return sendError(socket, "Не хватает денег.");
       cow.healthLevel++;
       cow.maxHp = getHealthMax(cow.type, cow.healthLevel);
       cow.hp = cow.maxHp;
@@ -368,32 +361,37 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
-  socket.on('collectMilk', (milkId) => {
-    const idx = gameState.milk.findIndex(m => m.id === milkId);
+  socket.on("collectMilk", id => {
+    const idx = gameState.milk.findIndex(m => m.id === id);
     if (idx === -1) return;
+
     const m = gameState.milk[idx];
+    gameState.money += m.type === "normal" ? 1 : 2;
+
     gameState.milk.splice(idx, 1);
-    gameState.money += (m.type === 'normal' ? 1 : 2);
     broadcastState();
   });
 
-  socket.on('hitZombie', (zombieId) => {
-    const z = gameState.zombies.find(z => z.id === zombieId);
+  socket.on("hitZombie", id => {
+    const z = gameState.zombies.find(z => z.id === id);
     if (!z) return;
+
     z.hp -= 1;
-    if (z.hp <= 0) {
-      gameState.zombies = gameState.zombies.filter(zz => zz.id !== zombieId);
-    }
+    if (z.hp <= 0)
+      gameState.zombies = gameState.zombies.filter(zz => zz.id !== id);
+
     endNightIfNoZombies();
     broadcastState();
   });
 });
 
+// ---------------- ИГРОВОЙ ЦИКЛ ----------------
+
 let lastTick = Date.now();
 
 setInterval(() => {
   const now = Date.now();
-  const dtSec = (now - lastTick) / 1000;
+  const dt = (now - lastTick) / 1000;
   lastTick = now;
 
   gameState.cows.forEach(cow => {
@@ -410,11 +408,13 @@ setInterval(() => {
     startNight();
   }
 
-  updateZombies(dtSec);
+  updateZombies(dt);
 
   broadcastState();
 }, 1000);
 
+// ---------------- СТАРТ ----------------
+
 server.listen(PORT, () => {
-  console.log('Server listening on port', PORT);
+  console.log("Server running on port", PORT);
 });
